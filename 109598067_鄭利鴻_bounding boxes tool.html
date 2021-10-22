@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<title>three.js webgl - loaders - MMD loader</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	<link type="text/css" rel="stylesheet" href="main.css">
+	<style>
+		body {
+			width:100vw;
+			height:100vh;
+			margin:0;
+			padding:0;
+		}
+
+        a {
+
+			color: #08f;
+        }
+	</style>
+</head>
+
+<body>
+	<div id="info">
+		<p>控制面板說明<p>
+		<p>Operation-pointer / select:視角自由控制、左眼框線(拖移)選取<p>
+		<p>Tools-origin / face / leye(left eye) / reye(right eye):快速鏡頭縮放<p>
+		<p>Tools-l2r(left to right):複製框線並拖移至另一側、Tools-download:保存框線數據<p>
+	</div>
+
+	<script src="js/libs/ammo.wasm.js"></script>
+	<script src="scoreoutputer.min.js"></script>
+	<script>
+		// 建構子 ScoreOutputer 接受一個字串，該字串為 csv 的檔案名稱
+		// 以下面範例，檔名就為 "109598105(總分: 6).csv"
+		var so = new ScoreOutputer("109598105");
+		so.installCSS(function () {
+			// 安裝 bootstrap 的 css，如果在 html 上方引用 bootstrap 5.1.1 的話就不用使用 installCSS ，注意一定要 bootstrap css 5.1.1 版
+			// installCSS 接收一個 callback 當作參數，作為成功安裝 bootstrap css 的回呼函式
+
+			//加入項目，分數，完成狀況
+			//第一個參數為 項目名稱
+			//第2個參數為 項目分數
+			//第3個參數為 完成狀況，有完成 true/未完成 false
+			//有幾個項目就呼叫幾個 addChild
+			//addChild 要比 renderModal 先呼叫
+			so.addChild("視角可以移動及放大", 2, true);
+			so.addChild("在畫面上畫出左眼的邊框", 2, false);
+			so.addChild("複製左眼邊框變化到右眼", 2, false);
+			so.addChild("可選擇當前讀取角色或按鍵選擇上 / 下一隻角色", 1, false);
+			so.addChild("可儲存座標點檔案", 1, false);
+			so.addChild("回答問題", 2, false);
+
+			//產生自評表，參數如下所示
+			so.renderModal(
+				//1. 自評表插入位置 (預設 document.body)
+				document.body,
+				//2. 自評表背景 (預設紅色)
+				'rgba(100,45,58,1)',
+				//3. 自評表文字顏色 (預設白色)
+				'white',
+				//4. 自評表文字大小 (預設 14pt)
+				'15pt',
+				//5. 自評表 checkbox 文字大小 (預設多少忘了)
+				'15px',
+				//6. 自評表標題 (預設 "自我評分表")
+				dialogTitle = "自我評分表"
+			);
+
+			//設定下載按鈕 <-- 一定要呼叫這個函數，不然沒有下載功能
+			so.installDownloadBtn();
+
+			let sheet = document.createElement('div')
+
+            sheet.style.position = 'absolute'
+            sheet.style.top = 0
+			sheet.style.left = 0
+
+            document.body.appendChild(sheet)
+			//產生 "開啟自評表按鈕"
+			so.renderBtn(
+				//自評表按鈕插入位置
+				sheet,
+				//自評表按鈕文字
+				"開啟自評表"
+			);
+		});
+	</script>
+	<script type="module">
+
+		import * as THREE from './build/three.module.js';
+		import { GUI } from './jsm/libs/dat.gui.module.js';
+		import { OrbitControls } from './jsm/controls/OrbitControls.js';
+		import { OutlineEffect } from './jsm/effects/OutlineEffect.js';
+		import { MMDLoader } from './jsm/loaders/MMDLoader.js';
+		import { MMDAnimationHelper } from './jsm/animation/MMDAnimationHelper.js';
+
+		let camera, scene, renderer, effect, lineGroup;
+		let mesh, helper, center;
+		let lbox = { xmin: 0, xmax: 0, ymin: 0, ymax: 0 }
+
+		const vpds = [];
+
+		Ammo().then(function (AmmoLib) {
+
+			Ammo = AmmoLib;
+
+			init();
+			animate();
+
+		});
+
+		function init() {
+
+			const container = document.createElement('div');
+			document.body.appendChild(container);
+			let scale = 30;
+			camera = new THREE.OrthographicCamera(window.innerWidth / scale / - 2, window.innerWidth / scale / 2, window.innerHeight / scale / 2, window.innerHeight / scale / - 2, 0.000001, 100);
+			//camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 2000 );
+			camera.position.z = 25;
+
+			// scene
+
+			scene = new THREE.Scene();
+			scene.background = new THREE.Color(0xffffff);
+
+			const ambient = new THREE.AmbientLight(0x666666);
+			scene.add(ambient);
+
+			const directionalLight = new THREE.DirectionalLight(0x887766);
+			directionalLight.position.set(- 1, 1, 1).normalize();
+			scene.add(directionalLight);
+
+			//
+			lineGroup = new THREE.Group()
+            scene.add(lineGroup)
+
+			renderer = new THREE.WebGLRenderer({ antialias: true });
+			renderer.setPixelRatio(window.devicePixelRatio);
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			container.appendChild(renderer.domElement);
+
+
+			effect = new OutlineEffect(renderer);
+
+			// model
+
+			function onProgress(xhr) {
+
+				if (xhr.lengthComputable) {
+
+					const percentComplete = xhr.loaded / xhr.total * 100;
+					console.log(Math.round(percentComplete, 2) + '% downloaded');
+
+				}
+
+			}
+
+			const vpdFiles = [
+				'models/mmd/vpds/01.vpd',
+				'models/mmd/vpds/02.vpd',
+				'models/mmd/vpds/03.vpd',
+				'models/mmd/vpds/04.vpd',
+				'models/mmd/vpds/05.vpd',
+				'models/mmd/vpds/06.vpd',
+				'models/mmd/vpds/07.vpd',
+				'models/mmd/vpds/08.vpd',
+				//'models/mmd/vpds/09.vpd',
+				//'models/mmd/vpds/10.vpd',
+				'models/mmd/vpds/11.vpd'
+			];
+
+			helper = new MMDAnimationHelper();
+
+			const loader = new MMDLoader();
+            initGui();
+			//
+
+			window.addEventListener('resize', onWindowResize);
+			//鏡頭控制
+			const cameracontrols = new OrbitControls(camera, renderer.domElement);
+			cameracontrols.minDistance = 10;
+			cameracontrols.maxDistance = 1000;
+			cameracontrols.enableRotate = false;
+
+			let axis = new THREE.AxisHelper(200)
+			scene.add(axis)
+
+			function initGui() {
+
+				const gui = new GUI();
+				
+				const controls = {};
+
+				const characters = gui.addFolder('Characters')
+				const operations = gui.addFolder('Operations')
+                const tools = gui.addFolder('tools')
+				const poses = gui.addFolder('Poses');
+				const morphs = gui.addFolder('Morphs');
+
+				let dictionary = []
+
+				function getBaseName(s) {
+
+					return s.slice(s.lastIndexOf('/') + 1);
+
+				}
+
+				function getModelPosition(name) {
+					let pos = new THREE.Vector3(0, 0, 0)
+                    let newPos = new THREE.Vector3(0, 0, 0)
+
+                    if (mesh == null) {
+						return pos
+                    }
+
+                    let bones = mesh.geometry.bones
+					let bone
+
+                    for (let i = 0; i < bones.length; i++) {
+                        bone = bones[i]
+
+						if (bone.name == name) {
+                            pos.set(...bone.pos)
+
+                            while (bone.parent != -1) {
+                                bone = bones[bone.parent]
+								newPos.set(...bone.pos)
+								pos.add(newPos)
+							}
+
+							bone = bones[i + 1]
+
+                            newPos.set(...bone.pos)
+                            pos.add(newPos)
+
+                            while (bone.parent != -1) {
+                                bone = bones[bone.parent]
+                                newPos.set(...bone.pos)
+                                pos.add(newPos)
+							}
+
+							pos.divideScalar(2)
+							//pos.x += 0.2
+
+                            break
+                        }
+					}
+
+					return pos
+                }
+
+				function initControls() {
+
+					controls.characters = -1;
+					controls.pose = -1;
+					controls.operation = -1;
+
+					controls.dictionary = {}
+					controls.vpd = {}
+
+					for (let i = 0; i < vpdFiles.length; i++) {
+
+						controls.vpd[getBaseName(vpdFiles[i])] = false;
+
+					}
+
+					controls.leftEye = function () {
+                        let pos = getModelPosition('左目')
+                        move2Target(pos, 50)
+					}
+
+                    controls.rightEye = function () {
+                        let pos = getModelPosition('右目')
+                        move2Target(pos, 50)
+					}
+
+                    controls.face = function () {
+                        let pos = getModelPosition('頭')
+                        move2Target(pos, 10)
+                    }
+
+					controls.l2r = function () {
+						let obj0 = scene.getObjectByName('l0')
+                        let obj1 = scene.getObjectByName('l1')
+                        let obj2 = scene.getObjectByName('l2')
+                        let obj3 = scene.getObjectByName('l3')
+
+						if (obj0 == null || obj1 == null || obj2 == null || obj3 == null) {
+							return
+                        }
+
+                        let arr = obj0.children[0].geometry.attributes.position.array.slice(3)
+						let pos0 = new THREE.Vector3().set(-arr[0], arr[1], arr[2])
+                        arr = obj1.children[0].geometry.attributes.position.array.slice(3)
+                        let pos1 = new THREE.Vector3().set(-arr[0], arr[1], arr[2])
+                        arr = obj2.children[0].geometry.attributes.position.array.slice(3)
+                        let pos2 = new THREE.Vector3().set(-arr[0], arr[1], arr[2])
+                        arr = obj3.children[0].geometry.attributes.position.array.slice(3)
+                        let pos3 = new THREE.Vector3().set(-arr[0], arr[1], arr[2])
+
+                        addLine([pos0, pos1], 0xff00ff, 'r0')
+                        addLine([pos1, pos2], 0x00ffff, 'r1')
+                        addLine([pos2, pos3], 0xff00ff, 'r2')
+                        addLine([pos3, pos0], 0x00ffff, 'r3')
+					}
+
+                    controls.origin = function () {
+                        move2Target(center)
+					}
+
+					controls.download = function () {
+						let downloadLink = document.createElement('a')
+						let blob = new Blob([JSON.stringify(lbox, null, 2)], { type: 'application/json' })
+						downloadLink.href = URL.createObjectURL(blob)
+						downloadLink.download = 'data'
+                        downloadLink.click()
+                    }
+				}
+
+				const modelFile = [
+					'models/mmd/kizunaai/kizunaai.pmx',
+					'models/mmd/kokoro/kokoro.pmx',
+                    'models/mmd/るいのれ式物述有栖_配布用フォルダ/物述有栖.pmx'
+				]
+
+				function initCharater() {
+					const kiaraList = {
+						default: -1,
+						kizunaAI: 0,
+						kokoro: 1,
+                        物述有栖: 2
+					}
+
+                    characters.add(controls, 'characters', kiaraList).onChange(onChangeCharacter)
+                }
+
+				function initOpertation() {
+					const func = {
+						pointer: -1,
+						select: 0
+					}
+                    operations.add(controls, 'operation', func).onChange(onChangeOperation)
+                }
+
+				function initPoses() {
+
+					const files = { default: - 1 };
+
+					for (let i = 0; i < vpdFiles.length; i++) {
+
+						files[getBaseName(vpdFiles[i])] = i;
+
+					}
+
+					poses.add(controls, 'pose', files).onChange(onChangePose);
+
+				}
+
+				function initMorphs() {
+                    //console.log(morphs.__controllers)
+
+					while (morphs.__controllers.length > 0) {
+                        morphs.remove(morphs.__controllers[0])
+                    }
+
+					for (const key in dictionary) {						
+						morphs.add(controls.dictionary, key, 0.0, 1.0, 0.01).onChange(onChangeMorph);
+                    } 
+				}
+
+				function initTools() {
+
+					tools.add(controls, 'origin')
+					tools.add(controls, 'face')
+					tools.add(controls, 'leftEye')
+					tools.add(controls, 'rightEye')
+					tools.add(controls, 'l2r')
+                    tools.add(controls, 'download')
+				}
+
+				function move2Target(target=new THREE.Vector3(0,0,0), zoom=1) {
+					camera.position.x = target.x
+					camera.position.y = target.y
+					camera.zoom = zoom
+					camera.updateProjectionMatrix()
+
+					cameracontrols.target.copy(target)
+					cameracontrols.update()
+				}
+
+				function onChangeCharacter() {
+					
+					loader.load(modelFile[controls.characters], function (object) {
+						if (mesh != null) {
+							scene.remove(mesh)
+						}
+
+						mesh = object;
+						mesh.geometry.computeBoundingBox()
+
+						center = new THREE.Vector3()
+                        mesh.geometry.boundingBox.getCenter(center)
+						move2Target(center)
+						scene.add(mesh);
+
+						dictionary = mesh.morphTargetDictionary
+                        controls.dictionary = {}
+                        for (const key in dictionary) {
+                            controls.dictionary[key] = 0.0;
+						}
+						console.log(mesh)
+						initMorphs();
+                        onChangeMorph();
+                        onChangePose();
+
+                    }, onProgress, null);
+				}
+
+				function initVpds() {
+					let vpdIndex = 0;
+                    function loadVpd() {
+
+                        const vpdFile = vpdFiles[vpdIndex];
+
+                        loader.loadVPD(vpdFile, false, function (vpd) {
+
+                            vpds.push(vpd);
+
+                            vpdIndex++;
+
+                            if (vpdIndex < vpdFiles.length) {
+
+                                loadVpd();
+
+                            }
+
+                        }, onProgress, null);
+
+                    }
+
+                    loadVpd();
+				}
+
+				function getMousePosition(evt) {
+
+					let mouse = new THREE.Vector2(0, 0)
+					mouse.x = (evt.clientX / window.innerWidth) * 2 - 1
+					mouse.y = -(evt.clientY / window.innerHeight) * 2 + 1
+					
+					return mouse
+                }
+
+                let startPos = new THREE.Vector2()
+				let endPos = new THREE.Vector2()
+                let pos0 = new THREE.Vector3()
+                let pos1 = new THREE.Vector3()
+                let pos2 = new THREE.Vector3()
+                let pos3 = new THREE.Vector3()
+				let mode = -1
+				let raycaster = new THREE.Raycaster()
+				let result, results
+				let obj0, obj1, obj2, obj3
+
+				let onMouseDown = (evt) => {
+					raycaster.setFromCamera(getMousePosition(evt), camera)
+					results = raycaster.intersectObjects(lineGroup.children)
+					result = null
+
+					for (let i = 0; i < results.length; i++) {
+						if (results[i].object.type == 'Mesh') {
+                            result = results[i].object
+                        }
+                    }
+					    
+					if (result != null) {
+						mode = 2
+                        obj0 = scene.getObjectByName('l0')
+                        obj1 = scene.getObjectByName('l1')
+                        obj2 = scene.getObjectByName('l2')
+                        obj3 = scene.getObjectByName('l3')
+					}
+					else {
+						mode = 0
+                    }
+                    startPos.copy(getMousePosition(evt))
+                }
+
+                function addLine(points, color, name) {
+                    let obj = scene.getObjectByName(name)
+					let geometry, material, group, vertices
+
+                    let pxmin = Math.min(points[0].x, points[1].x)
+                    let pxmax = Math.max(points[0].x, points[1].x)
+                    let pymin = Math.min(points[0].y, points[1].y)
+                    let pymax = Math.max(points[0].y, points[1].y)
+					let pz = (points[0].z + points[1].z) / 2
+
+					if (points[0].x == points[1].x) {
+						pxmax += 0.05
+						pxmin -= 0.05
+					}
+					else {
+                        pymax += 0.05
+                        pymin -= 0.05
+					}
+
+					points[0].z = 0
+                    points[1].z = 0
+
+                    vertices = new Float32Array([
+                        pxmax, pymax, 0,
+                        pxmin, pymax, 0,
+                        pxmin, pymin, 0,
+                        pxmax, pymax, 0,
+                        pxmin, pymin, 0,
+                        pxmax, pymin, 0,
+                    ])
+
+					if (obj == null) {
+                        group = new THREE.Group()
+						group.name = name
+
+                        geometry = new THREE.BufferGeometry().setFromPoints(points)
+                        material = new THREE.LineBasicMaterial({
+                            color: color,
+                            depthTest: false
+                        })
+
+						let line = new THREE.Line(geometry, material)
+						group.add(line) 
+
+						geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(vertices, 3))
+						material = new THREE.MeshBasicMaterial({
+							opacity: 0,
+							transparent: true,
+							color:0xaa2244,
+							side: THREE.DoubleSide,
+							depthTest: false
+						})
+
+						let space = new THREE.Mesh(geometry, material)
+						group.add(space)
+
+						lineGroup.add(group)
+                    }
+					else {
+
+						obj.children[0].geometry.setFromPoints(points)
+
+						obj.children[1].geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
+                    }
+
+				}
+
+                let onMouseMove = (evt) => {
+					if (mode == -1) {
+						return
+					}
+
+					else if (mode == 0) {
+						endPos.copy(getMousePosition(evt))
+
+                        lbox.xmin = Math.min(startPos.x, endPos.x)
+                        lbox.xmax = Math.max(startPos.x, endPos.x)
+                        lbox.ymin = Math.min(startPos.y, endPos.y)
+                        lbox.ymax = Math.max(startPos.y, endPos.y)
+
+                        pos0.set(lbox.xmin, lbox.ymin, 0).unproject(camera)
+                        pos1.set(lbox.xmax, lbox.ymin, 0).unproject(camera)
+                        pos2.set(lbox.xmax, lbox.ymax, 0).unproject(camera)
+                        pos3.set(lbox.xmin, lbox.ymax, 0).unproject(camera)
+
+                        addLine([pos0, pos1], 0xff0000, 'l0')
+                        addLine([pos1, pos2], 0x00ff00, 'l1')
+                        addLine([pos2, pos3], 0xff0000, 'l2')
+                        addLine([pos3, pos0], 0x00ff00, 'l3')
+					}
+
+					else if (mode == 2) {
+
+                        if (obj0 == null || obj1 == null || obj2 == null || obj3 == null) {
+                            return
+						}
+
+						let obj = result.parent
+						endPos.copy(getMousePosition(evt))
+
+                        console.log(obj.name)
+
+						if (obj.name == 'l0') {
+                            lbox.ymin = endPos.y
+                        }
+                        else if (obj.name == 'l1') {
+                            lbox.xmax = endPos.x
+						}
+                        else if (obj.name == 'l2') {
+                            lbox.ymax = endPos.y
+						}
+                        else if (obj.name == 'l3') {
+                            lbox.xmin = endPos.x
+						}
+
+                        pos0.set(lbox.xmin, lbox.ymin, 0).unproject(camera)
+                        pos1.set(lbox.xmax, lbox.ymin, 0).unproject(camera)
+                        pos2.set(lbox.xmax, lbox.ymax, 0).unproject(camera)
+                        pos3.set(lbox.xmin, lbox.ymax, 0).unproject(camera)
+
+                        addLine([pos0, pos1], 0xff0000, 'l0')
+                        addLine([pos1, pos2], 0x00ff00, 'l1')
+                        addLine([pos2, pos3], 0xff0000, 'l2')
+						addLine([pos3, pos0], 0x00ff00, 'l3')
+
+						console.log(pos0, pos1, pos2, pos3)
+                    }
+                }
+
+				let onMouseUp = (evt) => {
+					
+					mode = -1
+				}
+
+				function onChangeOperation() {
+                    
+
+					switch (controls.operation) {
+						case '-1':
+							cameracontrols.enabled = true
+                            renderer.domElement.removeEventListener('mousedown', onMouseDown)
+                            renderer.domElement.removeEventListener('mousemove', onMouseMove)
+                            renderer.domElement.removeEventListener('mouseup', onMouseUp)
+							break
+						case '0':
+							cameracontrols.enabled = false
+
+							renderer.domElement.addEventListener('mousedown', onMouseDown)
+							renderer.domElement.addEventListener('mousemove', onMouseMove)
+							renderer.domElement.addEventListener('mouseup', onMouseUp)
+							break
+                    }
+                }
+
+				function onChangeMorph() {
+					let keys = Object.keys(dictionary)
+
+                    for (let i = 0; i < keys.length; i++) {
+						let key = keys[i]
+                        
+                        mesh.morphTargetInfluences[i] = controls.dictionary[key]
+                    }
+				}
+
+				function onChangePose() {
+
+					const index = parseInt(controls.pose);
+
+					if (index === - 1) {
+
+						mesh.pose();
+
+					} else {
+
+						helper.pose(mesh, vpds[index]);
+
+					}
+
+				}
+                initControls();
+                initVpds()
+                initCharater()
+				
+				initPoses();
+				initMorphs();
+				initOpertation();
+				initTools();
+
+				characters.open();
+				operations.open();
+				tools.open();
+
+			}
+
+		}
+
+		function onWindowResize() {
+
+			let scale = 30;
+			camera.left = window.innerWidth / scale / - 2;
+			camera.right = window.innerWidth / scale / 2;
+			camera.top = window.innerHeight / scale / 2;
+			camera.bottom = window.innerHeight / scale / - 2;
+			camera.updateProjectionMatrix();
+
+			effect.setSize(window.innerWidth, window.innerHeight);
+
+		}
+
+		//
+
+		function animate() {
+
+			requestAnimationFrame(animate);
+			render();
+
+		}
+
+		function render() {
+
+			effect.render(scene, camera);
+
+		}
+	</script>
+
+</body>
+
+</html>
