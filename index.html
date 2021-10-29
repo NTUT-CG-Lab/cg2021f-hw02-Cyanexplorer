@@ -24,7 +24,7 @@
 <body>
 	<div id="info">
 		<p>控制面板說明<p>
-		<p>Operation-pointer / select:視角自由控制、左眼框線(拖移)選取<p>
+		<p>Operation-pointer / select:視角自由控制、左眼框線選取/拖移調整<p>
 		<p>Tools-origin / face / leye(left eye) / reye(right eye):快速鏡頭縮放<p>
 		<p>Tools-l2r(left to right):複製框線並拖移至另一側、Tools-download:保存框線數據<p>
 	</div>
@@ -96,9 +96,10 @@
 		import { MMDLoader } from './jsm/loaders/MMDLoader.js';
 		import { MMDAnimationHelper } from './jsm/animation/MMDAnimationHelper.js';
 
-		let camera, scene, renderer, effect, lineGroup;
+        let camera, scene, renderer, effect, lineGroup, touchGroup, sphereInter;
 		let mesh, helper, center;
 		let lbox = { xmin: 0, xmax: 0, ymin: 0, ymax: 0 }
+		let mouse = new THREE.Vector2(0, 0)
 
 		const vpds = [];
 
@@ -116,8 +117,7 @@
 			const container = document.createElement('div');
 			document.body.appendChild(container);
 			let scale = 30;
-			camera = new THREE.OrthographicCamera(window.innerWidth / scale / - 2, window.innerWidth / scale / 2, window.innerHeight / scale / 2, window.innerHeight / scale / - 2, 0.000001, 100);
-			//camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 2000 );
+			camera = new THREE.OrthographicCamera(window.innerWidth / scale / - 2, window.innerWidth / scale / 2, window.innerHeight / scale / 2, window.innerHeight / scale / - 2, 0.000001, 1000);
 			camera.position.z = 25;
 
 			// scene
@@ -133,7 +133,7 @@
 			scene.add(directionalLight);
 
 			//
-			lineGroup = new THREE.Group()
+			lineGroup = new THREE.Object3D()
             scene.add(lineGroup)
 
 			renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -141,6 +141,19 @@
 			renderer.setSize(window.innerWidth, window.innerHeight);
 			container.appendChild(renderer.domElement);
 
+			// Marker
+			sphereInter = new THREE.Mesh(
+				new THREE.SphereGeometry(0.08),
+				new THREE.MeshBasicMaterial(
+					{
+						color: 0xff0000,
+                        depthTest: false
+					}
+				)
+			);
+
+            sphereInter.visible = false;
+            scene.add(sphereInter);
 
 			effect = new OutlineEffect(renderer);
 
@@ -291,13 +304,13 @@
 							return
                         }
 
-                        let arr = obj0.children[0].geometry.attributes.position.array.slice(3)
+                        let arr = obj0.geometry.attributes.position.array.slice(3)
 						let pos0 = new THREE.Vector3().set(-arr[0], arr[1], arr[2])
-                        arr = obj1.children[0].geometry.attributes.position.array.slice(3)
+                        arr = obj1.geometry.attributes.position.array.slice(3)
                         let pos1 = new THREE.Vector3().set(-arr[0], arr[1], arr[2])
-                        arr = obj2.children[0].geometry.attributes.position.array.slice(3)
+                        arr = obj2.geometry.attributes.position.array.slice(3)
                         let pos2 = new THREE.Vector3().set(-arr[0], arr[1], arr[2])
-                        arr = obj3.children[0].geometry.attributes.position.array.slice(3)
+                        arr = obj3.geometry.attributes.position.array.slice(3)
                         let pos3 = new THREE.Vector3().set(-arr[0], arr[1], arr[2])
 
                         addLine([pos0, pos1], 0xff00ff, 'r0')
@@ -413,7 +426,7 @@
 						console.log(mesh)
 						initMorphs();
                         onChangeMorph();
-                        onChangePose();
+						onChangePose();
 
                     }, onProgress, null);
 				}
@@ -443,15 +456,6 @@
                     loadVpd();
 				}
 
-				function getMousePosition(evt) {
-
-					let mouse = new THREE.Vector2(0, 0)
-					mouse.x = (evt.clientX / window.innerWidth) * 2 - 1
-					mouse.y = -(evt.clientY / window.innerHeight) * 2 + 1
-					
-					return mouse
-                }
-
                 let startPos = new THREE.Vector2()
 				let endPos = new THREE.Vector2()
                 let pos0 = new THREE.Vector3()
@@ -460,67 +464,35 @@
                 let pos3 = new THREE.Vector3()
 				let mode = -1
 				let raycaster = new THREE.Raycaster()
-				let result, results
+				let result
 				let obj0, obj1, obj2, obj3
 
-				let onMouseDown = (evt) => {
-					raycaster.setFromCamera(getMousePosition(evt), camera)
-					results = raycaster.intersectObjects(lineGroup.children)
-					result = null
+				raycaster.params.Line.threshold = 0.1
+				raycaster.linePrecision = 0.1
 
-					for (let i = 0; i < results.length; i++) {
-						if (results[i].object.type == 'Mesh') {
-                            result = results[i].object
-                        }
-                    }
-					    
-					if (result != null) {
-						mode = 2
+                let onMouseDown = (evt) => {
+
+                    if (result != null) {
+                        mode = 2
                         obj0 = scene.getObjectByName('l0')
                         obj1 = scene.getObjectByName('l1')
                         obj2 = scene.getObjectByName('l2')
                         obj3 = scene.getObjectByName('l3')
-					}
-					else {
-						mode = 0
                     }
-                    startPos.copy(getMousePosition(evt))
+                    else {
+                        mode = 0
+                    }
+                    startPos.copy(mouse)
                 }
 
                 function addLine(points, color, name) {
                     let obj = scene.getObjectByName(name)
-					let geometry, material, group, vertices
-
-                    let pxmin = Math.min(points[0].x, points[1].x)
-                    let pxmax = Math.max(points[0].x, points[1].x)
-                    let pymin = Math.min(points[0].y, points[1].y)
-                    let pymax = Math.max(points[0].y, points[1].y)
-					let pz = (points[0].z + points[1].z) / 2
-
-					if (points[0].x == points[1].x) {
-						pxmax += 0.05
-						pxmin -= 0.05
-					}
-					else {
-                        pymax += 0.05
-                        pymin -= 0.05
-					}
+					let geometry, material
 
 					points[0].z = 0
                     points[1].z = 0
 
-                    vertices = new Float32Array([
-                        pxmax, pymax, 0,
-                        pxmin, pymax, 0,
-                        pxmin, pymin, 0,
-                        pxmax, pymax, 0,
-                        pxmin, pymin, 0,
-                        pxmax, pymin, 0,
-                    ])
-
 					if (obj == null) {
-                        group = new THREE.Group()
-						group.name = name
 
                         geometry = new THREE.BufferGeometry().setFromPoints(points)
                         material = new THREE.LineBasicMaterial({
@@ -529,38 +501,39 @@
                         })
 
 						let line = new THREE.Line(geometry, material)
-						group.add(line) 
-
-						geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(vertices, 3))
-						material = new THREE.MeshBasicMaterial({
-							opacity: 0,
-							transparent: true,
-							color:0xaa2244,
-							side: THREE.DoubleSide,
-							depthTest: false
-						})
-
-						let space = new THREE.Mesh(geometry, material)
-						group.add(space)
-
-						lineGroup.add(group)
+						line.name = name
+						lineGroup.add(line)
                     }
 					else {
-
-						obj.children[0].geometry.setFromPoints(points)
-
-						obj.children[1].geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
+						geometry = new THREE.BufferGeometry().setFromPoints(points)
+						obj.geometry = geometry
                     }
 
 				}
 
-                let onMouseMove = (evt) => {
+				let onMouseMove = (evt) => {
+                    mouse.x = (evt.clientX / window.innerWidth) * 2 - 1
+					mouse.y = -(evt.clientY / window.innerHeight) * 2 + 1
+
 					if (mode == -1) {
+						raycaster.setFromCamera(mouse, camera);
+
+						const intersects = raycaster.intersectObjects(lineGroup.children, true);
+
+                        if (intersects.length > 0) {
+                            sphereInter.visible = true;
+							sphereInter.position.copy(intersects[0].point);
+							result = intersects[0].object
+
+                        } else {
+							sphereInter.visible = false;
+							result = null
+                        }
 						return
 					}
 
 					else if (mode == 0) {
-						endPos.copy(getMousePosition(evt))
+						endPos.copy(mouse)
 
                         lbox.xmin = Math.min(startPos.x, endPos.x)
                         lbox.xmax = Math.max(startPos.x, endPos.x)
@@ -584,10 +557,8 @@
                             return
 						}
 
-						let obj = result.parent
-						endPos.copy(getMousePosition(evt))
-
-                        console.log(obj.name)
+						let obj = result
+						endPos.copy(mouse)
 
 						if (obj.name == 'l0') {
                             lbox.ymin = endPos.y
@@ -612,7 +583,6 @@
                         addLine([pos2, pos3], 0xff0000, 'l2')
 						addLine([pos3, pos0], 0x00ff00, 'l3')
 
-						console.log(pos0, pos1, pos2, pos3)
                     }
                 }
 
@@ -706,7 +676,6 @@
 		}
 
 		function render() {
-
 			effect.render(scene, camera);
 
 		}
